@@ -4,7 +4,7 @@ import bgu.spl.net.api.MessageEncoderDecoder;
 import java.util.HashMap;
 import java.util.Map;
 
-public class StompEncoderDecoder implements MessageEncoderDecoder<Frame> {
+public class StompEncoderDecoder implements MessageEncoderDecoder<String> {
     
     // State machine for parsing STOMP frames
     private enum State {
@@ -30,7 +30,7 @@ public class StompEncoderDecoder implements MessageEncoderDecoder<Frame> {
     }
     
     @Override
-    public Frame decodeNextByte(byte nextByte) {
+    public String decodeNextByte(byte nextByte) {
         // Check for null terminator - frame is complete
         if (nextByte == 0) {
             return completeFrame();
@@ -50,7 +50,7 @@ public class StompEncoderDecoder implements MessageEncoderDecoder<Frame> {
         }
     }
     
-    private Frame processCommandByte(char c) {
+    private String processCommandByte(char c) {
         if (c == '\n') {
             // End of command line, move to headers
             command = lineBuffer.toString().trim();
@@ -62,7 +62,7 @@ public class StompEncoderDecoder implements MessageEncoderDecoder<Frame> {
         return null;
     }
     
-    private Frame processHeadersByte(char c) {
+    private String processHeadersByte(char c) {
         if (c == '\n') {
             String line = lineBuffer.toString();
             lineBuffer = new StringBuilder();
@@ -85,26 +85,26 @@ public class StompEncoderDecoder implements MessageEncoderDecoder<Frame> {
         return null;
     }
     
-    private Frame processBodyByte(char c) {
+    private String processBodyByte(char c) {
         bodyBuffer.append(c);
         return null;
     }
     
-    private Frame completeFrame() {
+    private String completeFrame() {
         Frame frame = new Frame(
             command != null ? command : "",
             new HashMap<>(headers),
             bodyBuffer.toString()
         );
         reset(); // prepare for next frame
-        return frame;
+        return frame.toString();
     }
     
     @Override
-    public byte[] encode(Frame message) {
+    public byte[] encode(String message) {
         if (message == null) {
             return new byte[0];
         }
-        return message.toString().getBytes();
+        return message.getBytes();
     }
 }

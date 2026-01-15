@@ -9,4 +9,13 @@ public interface Connections<T> {
     void send(String channel, T msg);
 
     void disconnect(int connectionId);
+    
+    //Functions We added to the interface 
+    
+    void connect(int connectionId, ConnectionHandler<T> handler); 
+
+    void subscribe(int connectionId, String channel, int subscriptionId);
+
+    void unsubscribe(int connectionId, int subscriptionId);
+
 }

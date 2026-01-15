@@ -216,49 +216,54 @@ private void handleConnect(Frame frame) {
 - Get destination from headers
 - Validate destination header present
 - Check client is subscribed to destination
-- Generate unique message-id using Database.getNextMessageId()
-- Create MESSAGE frame with:
-  - `message-id` header (server-generated unique ID)
-  - `destination` header (copy from SEND)
-  - Body from original SEND frame
-  - (subscription header added later by ConnectionsImpl when delivering)
-- Call `connections.send(destination, messageFrame)` to broadcast
+- Generate unique message-id (using AtomicInteger counter)
+- **APPROACH 3:** Create unique MESSAGE frame for EACH subscriber with their subscription-id
+- Use `getChannelSubscribers()` to iterate all subscribers
+- Send individual MESSAGE frames (NOT via `connections.send(channel, msg)`)
 - Send RECEIPT if receipt header present
 - Send ERROR and disconnect if not subscribed
 
-**Implementation outline:**
+**Implementation outline (Approach 3):**
 ```java
 private void handleSend(Frame frame) {
-    String destination = frame.getHeaders().get("destination");
+    String destination = frame.getHeader("destination");
     
     if (destination == null) {
-        sendError("Missing destination header", frame.getHeaders().get("receipt"));
+        sendError("Missing destination header", frame.getHeader("receipt"));
         return;
     }
     
     // CRITICAL: Check if client is subscribed to destination
     if (!isSubscribedTo(destination)) {
         sendError("Cannot send to channel not subscribed to: " + destination, 
-                  frame.getHeaders().get("receipt"));
+                  frame.getHeader("receipt"));
         return;
     }
     
-    // Generate unique message ID
-    int messageId = Database.getInstance().getNextMessageId();
+    // APPROACH 3: Get all subscribers and create unique MESSAGE frame for each
+    // Generate unique message ID (same for all copies of this message)
+    int messageId = messageIdCounter.incrementAndGet();
     
-    // Create MESSAGE frame with required headers
-    Map<String, String> messageHeaders = new HashMap<>();
-    messageHeaders.put("message-id", String.valueOf(messageId));
-    messageHeaders.put("destination", destination);
-    // Note: subscription header will be added by ConnectionsImpl when delivering to each subscriber
+    // Get all subscribers for this channel
+    ConcurrentHashMap<Integer, Integer> subscribers = 
+        ((ConnectionsImpl<String>) connections).getChannelSubscribers(destination);
     
-    Frame messageFrame = new Frame("MESSAGE", messageHeaders, frame.getBody());
-    
-    // Broadcast to all subscribers of this channel
-    connections.send(destination, messageFrame);
+    if (subscribers != null && !subscribers.isEmpty()) {
+        // Create and send unique MESSAGE frame for each subscriber
+        for (Map.Entry<Integer, Integer> entry : subscribers.entrySet()) {
+            int subscriberConnectionId = entry.getKey();
+            int subscriptionId = entry.getValue();
+            
+            // Create unique MESSAGE frame with subscriber-specific subscription header
+            Frame messageFrame = Frame.createMessage(messageId, destination, subscriptionId, frame.getBody());
+            
+            // Send directly to this connection (NOT via broadcast)
+            connections.send(subscriberConnectionId, messageFrame.toString());
+        }
+    }
     
     // Send RECEIPT if requested
-    sendReceipt(frame.getHeaders().get("receipt"));
+    sendReceipt(frame.getHeader("receipt"));
 }
 
 private boolean isSubscribedTo(String channel) {
@@ -458,59 +463,71 @@ public class StompServer {
 }
 ```
 
-## Part E: Database.java Modifications
+## Part E: Message ID Generation
 
-### Add Message ID Generation
+### Approach 3 Implementation
 
-**Location:** `server/src/main/java/bgu/spl/net/impl/data/Database.java`
+**Location:** `server/src/main/java/bgu/spl/net/impl/stomp/StompMessagingProtocolImpl.java`
 
-**Add field:**
+**Implementation:**
 ```java
-private final AtomicInteger messageIdCounter = new AtomicInteger(0);
+// Static message ID counter shared across all protocol instances
+private static final AtomicInteger messageIdCounter = new AtomicInteger(0);
+
+// In handleSend():
+int messageId = messageIdCounter.incrementAndGet();
 ```
 
-**Add method:**
-```java
-public int getNextMessageId() {
-    return messageIdCounter.incrementAndGet();
-}
-```
+**Rationale:**
+- No need to modify Database.java (keeps SQL-related logic separate)
+- Static field ensures uniqueness across all client connections
+- AtomicInteger provides thread-safe incrementing
+- Simple and sufficient for STOMP protocol requirements
 
-**Purpose:** Generate unique message-id for every MESSAGE frame sent by server
+**Alternative:** Could be added to Database.java if global tracking across server restarts is needed, but not required for assignment.
 
-## Part F: ConnectionsImpl.java Modifications
+## Part F: ConnectionsImpl.java Modifications (Approach 3)
 
-### Add Subscription Header to MESSAGE Frames
-
-**Critical:** When broadcasting MESSAGE to channel subscribers, must add `subscription` header for each recipient
+### Add Helper Method for Protocol Layer
 
 **Location:** `server/src/main/java/bgu/spl/net/srv/ConnectionsImpl.java`
 
-**Modify send(String channel, T msg) method:**
+**Added method:**
+```java
+/**
+ * Get all subscribers for a channel with their subscription IDs.
+ * Used by protocol layer to create unique MESSAGE frames per subscriber.
+ * 
+ * @param channel The channel/destination
+ * @return Map of connectionId -> subscriptionId, or null if channel has no subscribers
+ */
+public ConcurrentHashMap<Integer, Integer> getChannelSubscribers(String channel) {
+    return channelSubscriptions.get(channel);
+}
+```
+
+**Modified send(String channel, T msg):**
 ```java
 @Override
 public void send(String channel, T msg) {
-    Set<Integer> subscribers = channelSubscriptions.get(channel);
+    // APPROACH 3: This method should NOT be used for MESSAGE frame broadcasting.
+    // MESSAGE frames require unique subscription-id per subscriber.
+    // Use getChannelSubscribers() to iterate and create unique frames instead.
+    
+    // For backward compatibility with potential non-MESSAGE broadcasts:
+    ConcurrentHashMap<Integer, Integer> subscribers = channelSubscriptions.get(channel);
     if (subscribers != null) {
-        for (Integer subscriberId : subscribers) {
-            ConnectionHandler<T> handler = handlers.get(subscriberId);
-            if (handler != null) {
-                // Add subscription header for this specific subscriber
-                if (msg instanceof Frame) {
-                    Frame frame = (Frame) msg;
-                    Integer subscriptionId = clientSubscriptions.get(subscriberId).get(channel);
-                    if (subscriptionId != null) {
-                        frame.getHeaders().put("subscription", String.valueOf(subscriptionId));
-                    }
-                }
-                handler.send(msg);
-            }
+        for (Integer connectionId : subscribers.keySet()) {
+            send(connectionId, msg);
         }
     }
 }
 ```
 
-**Note:** This ensures each MESSAGE frame includes which subscription it's being delivered to.
+**Key Difference from Original Plan:**
+- **Original approach:** ConnectionsImpl mutates Frame object to add subscription header (thread-safety issue)
+- **Approach 3:** Protocol layer creates unique Frame for each subscriber using `getChannelSubscribers()`
+- **Benefit:** Thread-safe, correct subscription headers, clear separation of concerns
 
 ## Testing Commands
 
@@ -531,12 +548,13 @@ mvn exec:java -Dexec.mainClass="bgu.spl.net.impl.stomp.StompServer" -Dexec.args=
 
 ## Implementation Order
 
-1. **Frame.java** (parse and toString)
-2. **StompEncoderDecoder.java** (state machine)
-3. **Database.java modifications** (add getNextMessageId)
-4. **StompProtocolImpl.java** (command handlers with all validation)
-5. **ConnectionsImpl.java modifications** (add subscription header)
-6. **StompServer.java** (main method)
+1. **Frame.java** (parse and toString) ✅
+2. **StompEncoderDecoder.java** (state machine) ✅
+3. **ConnectionsImpl.java modifications** (add getChannelSubscribers) ✅
+4. **StompMessagingProtocolImpl.java** (Approach 3: command handlers with per-subscriber MESSAGE frames) ✅
+5. **StompServer.java** (main method)
+
+**Note:** Database.java modifications NOT required - message ID generation handled in StompMessagingProtocolImpl.
 
 ## Critical Requirements Checklist
 

@@ -32,12 +32,20 @@ public class ConnectionsImpl<T> implements Connections<T> {
 
     @Override
     public void send(String channel, T msg) {
-        ConcurrentHashMap<Integer, Integer> subscribers = channelSubscriptions.get(channel);
-        if (subscribers != null) {
-            for (Integer connectionId : subscribers.keySet()) {
-                send(connectionId, msg);
-            }
-        }
+        // MESSAGE frames require unique subscription-id per subscriber.
+        // Use getChannelSubscribers() to iterate and create unique frames instead.
+        // The implementation for this function will be in the protocol handler
+    }
+    
+    /**
+     * Get all subscribers for a channel with their subscription IDs.
+     * Used by protocol layer to create unique MESSAGE frames per subscriber.
+     * 
+     * @param channel The channel/destination
+     * @return Map of connectionId -> subscriptionId, or null if channel has no subscribers
+     */
+    public ConcurrentHashMap<Integer, Integer> getChannelSubscribers(String channel) {
+        return channelSubscriptions.get(channel);
     }
 
     @Override

@@ -63,60 +63,72 @@ const std::string &Event::get_discription() const
 
 Event::Event(const std::string &frame_body) : team_a_name(""), team_b_name(""), name(""), time(0), game_updates(), team_a_updates(), team_b_updates(), description("")
 {
-    std::stringstream bodyStream(frame_body);
-    std::string line;
-    std::string current_section = "";
+    std::istringstream input_stream(frame_body);
+    std::string current_line;
     
-    while (std::getline(bodyStream, line)) {
-        if (line.empty()) continue;
+    enum class ParseState { NONE, GENERAL_UPDATES, TEAM_A_UPDATES, TEAM_B_UPDATES, DESCRIPTION };
+    ParseState state = ParseState::NONE;
+    
+    while (std::getline(input_stream, current_line)) {
+        if (current_line.empty()) continue;
         
-        if (line.find("user: ") == 0) {
-            // Skip user field
-        }
-        else if (line.find("team a: ") == 0) {
-            team_a_name = line.substr(8);
-        }
-        else if (line.find("team b: ") == 0) {
-            team_b_name = line.substr(8);
-        }
-        else if (line.find("event name: ") == 0) {
-            name = line.substr(12);
-        }
-        else if (line.find("time: ") == 0) {
-            time = std::stoi(line.substr(6));
-        }
-        else if (line == "general game updates:") {
-            current_section = "general";
-        }
-        else if (line == "team a updates:") {
-            current_section = "team_a";
-        }
-        else if (line == "team b updates:") {
-            current_section = "team_b";
-        }
-        else if (line == "description:") {
-            current_section = "description";
-            std::string desc_line;
-            while (std::getline(bodyStream, desc_line)) {
-                if (!description.empty()) description += "\n";
-                description += desc_line;
+        // Parse field: value format
+        size_t separator_pos = current_line.find(": ");
+        if (separator_pos != std::string::npos && state == ParseState::NONE) {
+            std::string field = current_line.substr(0, separator_pos);
+            std::string value = current_line.substr(separator_pos + 2);
+            
+            if (field == "user") {
+                continue; // Skip user field
+            } else if (field == "team a") {
+                team_a_name = value;
+            } else if (field == "team b") {
+                team_b_name = value;
+            } else if (field == "event name") {
+                name = value;
+            } else if (field == "time") {
+                time = std::stoi(value);
             }
-            break;
+            continue;
         }
-        else if (!current_section.empty() && current_section != "description") {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos) {
-                std::string key = line.substr(0, colon);
-                std::string value = line.substr(colon + 1);
+        
+        // Check for section transitions
+        if (current_line == "general game updates:") {
+            state = ParseState::GENERAL_UPDATES;
+        } else if (current_line == "team a updates:") {
+            state = ParseState::TEAM_A_UPDATES;
+        } else if (current_line == "team b updates:") {
+            state = ParseState::TEAM_B_UPDATES;
+        } else if (current_line == "description:") {
+            state = ParseState::DESCRIPTION;
+            // Collect remaining lines as description
+            std::string remaining_line;
+            while (std::getline(input_stream, remaining_line)) {
+                description += remaining_line + "\n";
+            }
+            // Remove trailing newline
+            if (!description.empty() && description.back() == '\n') {
+                description.pop_back();
+            }
+        } else if (state != ParseState::NONE && state != ParseState::DESCRIPTION) {
+            // Parse key:value in update sections
+            size_t separator_pos = current_line.find(':');
+            if (separator_pos != std::string::npos) {
+                std::string update_key = current_line.substr(0, separator_pos);
+                std::string update_value = current_line.substr(separator_pos + 1);
                 
-                if (current_section == "general") {
-                    game_updates[key] = value;
-                }
-                else if (current_section == "team_a") {
-                    team_a_updates[key] = value;
-                }
-                else if (current_section == "team_b") {
-                    team_b_updates[key] = value;
+                switch (state) {
+                    case ParseState::GENERAL_UPDATES:
+                        game_updates[update_key] = update_value;
+                        break;
+                    case ParseState::TEAM_A_UPDATES:
+                        team_a_updates[update_key] = update_value;
+                        break;
+                    case ParseState::TEAM_B_UPDATES:
+                        team_b_updates[update_key] = update_value;
+                        break;
+                    default:
+                        break;
                 }
             }
         }

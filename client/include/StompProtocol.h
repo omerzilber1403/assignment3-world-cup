@@ -41,7 +41,7 @@ private:
     std::map<int, std::string> receiptActions;
     std::map<std::string, std::map<std::string, std::vector<Event>>> gameEvents;
     
-    std::mutex mtx;
+    mutable std::mutex mtx;
     
     std::vector<std::string> split(const std::string& str, char delimiter);
     UserCommand parseUserCommand(const std::string& cmd);

@@ -2,6 +2,8 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <algorithm>
+#include <mutex>
 
 StompProtocol::StompProtocol() :
     handler(nullptr), shouldTerminate(false), isConnected(false),
@@ -15,15 +17,18 @@ void StompProtocol::setConnectionHandler(ConnectionHandler* h) {
 }
 
 void StompProtocol::close() {
+    std::lock_guard<std::mutex> lock(mtx);
     shouldTerminate = true;
     isConnected = false;
 }
 
 bool StompProtocol::shouldLogout() const {
+    std::lock_guard<std::mutex> lock(mtx);
     return shouldTerminate;
 }
 
 bool StompProtocol::isClientConnected() const {
+    std::lock_guard<std::mutex> lock(mtx);
     return isConnected;
 }
 
@@ -61,13 +66,20 @@ void StompProtocol::executeUserCommand(const std::string& line) {
     
     UserCommand cmd = parseUserCommand(args[0]);
     
+    // Check connection status with lock
+    bool connected;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        connected = isConnected;
+    }
+    
     switch (cmd) {
         case UserCommand::LOGIN:
             handleLogin(args);
             break;
             
         case UserCommand::JOIN:
-            if (!isConnected) {
+            if (!connected) {
                 std::cout << "Please login first" << std::endl;
                 return;
             }
@@ -75,7 +87,7 @@ void StompProtocol::executeUserCommand(const std::string& line) {
             break;
             
         case UserCommand::EXIT:
-            if (!isConnected) {
+            if (!connected) {
                 std::cout << "Please login first" << std::endl;
                 return;
             }
@@ -83,7 +95,7 @@ void StompProtocol::executeUserCommand(const std::string& line) {
             break;
             
         case UserCommand::LOGOUT:
-            if (!isConnected) {
+            if (!connected) {
                 std::cout << "Please login first" << std::endl;
                 return;
             }
@@ -91,7 +103,7 @@ void StompProtocol::executeUserCommand(const std::string& line) {
             break;
             
         case UserCommand::REPORT:
-            if (!isConnected) {
+            if (!connected) {
                 std::cout << "Please login first" << std::endl;
                 return;
             }
@@ -99,7 +111,7 @@ void StompProtocol::executeUserCommand(const std::string& line) {
             break;
             
         case UserCommand::SUMMARY:
-            if (!isConnected) {
+            if (!connected) {
                 std::cout << "Please login first" << std::endl;
                 return;
             }
@@ -116,10 +128,12 @@ bool StompProtocol::handleServerFrame(const std::string& frameStr) {
     ServerCommand cmd = parseServerCommand(frame.getCommand());
     
     switch (cmd) {
-        case ServerCommand::CONNECTED:
+        case ServerCommand::CONNECTED: {
+            std::lock_guard<std::mutex> lock(mtx);
             isConnected = true;
             std::cout << "Login successful" << std::endl;
             break;
+        }
             
         case ServerCommand::ERROR: {
             std::string message = frame.getHeader("message");
@@ -135,10 +149,15 @@ bool StompProtocol::handleServerFrame(const std::string& frameStr) {
         }
             
         case ServerCommand::RECEIPT: {
+            std::lock_guard<std::mutex> lock(mtx);
             int id = std::stoi(frame.getHeader("receipt-id"));
             
             if (receiptActions.find(id) != receiptActions.end()) {
                 std::string action = receiptActions[id];
+                receiptActions.erase(id);
+                
+                // Unlock before I/O and close() which will re-lock
+                lock.~lock_guard();
                 
                 if (action == "DISCONNECT") {
                     std::cout << "Disconnected properly." << std::endl;
@@ -147,14 +166,12 @@ bool StompProtocol::handleServerFrame(const std::string& frameStr) {
                 }
                 
                 std::cout << action << std::endl;
-                receiptActions.erase(id);
             }
             break;
         }
             
         case ServerCommand::MESSAGE: {
             std::string body = frame.getBody();
-            
             Event event(body);
             
             std::string user = "";
@@ -167,12 +184,22 @@ bool StompProtocol::handleServerFrame(const std::string& frameStr) {
                 }
             }
             
-            if (user == currentUserName) {
+            std::string currentUser;
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                currentUser = currentUserName;
+            }
+            
+            if (user == currentUser) {
                 return true;
             }
             
             std::string game_name = event.get_team_a_name() + "_" + event.get_team_b_name();
-            gameEvents[game_name][user].push_back(event);
+            
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                gameEvents[game_name][user].push_back(event);
+            }
             
             std::cout << "Received message from " << user << " in channel " << game_name << std::endl;
             break;
@@ -190,9 +217,12 @@ bool StompProtocol::handleServerFrame(const std::string& frameStr) {
 // ============================================
 
 void StompProtocol::handleLogin(const std::vector<std::string>& args) {
-    if (isConnected) {
-        std::cout << "The client is already logged in, log out before trying again" << std::endl;
-        return;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (isConnected) {
+            std::cout << "The client is already logged in, log out before trying again" << std::endl;
+            return;
+        }
     }
     
     if (args.size() < 4) {
@@ -211,7 +241,11 @@ void StompProtocol::handleLogin(const std::vector<std::string>& args) {
     
     std::string username = args[2];
     std::string password = args[3];
-    currentUserName = username;
+    
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        currentUserName = username;
+    }
     
     Frame frame("CONNECT");
     frame.addHeader("accept-version", "1.2");
@@ -230,16 +264,21 @@ void StompProtocol::handleJoin(const std::vector<std::string>& args) {
     
     std::string game_name = args[1];
     
-    if (subscriptions.count(game_name)) {
-        std::cout << "Already subscribed to " << game_name << std::endl;
-        return;
+    int sub_id, receipt_id;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        
+        if (subscriptions.count(game_name)) {
+            std::cout << "Already subscribed to " << game_name << std::endl;
+            return;
+        }
+        
+        sub_id = subscriptionIdCounter++;
+        receipt_id = receiptIdCounter++;
+        
+        subscriptions[game_name] = sub_id;
+        receiptActions[receipt_id] = "Joined channel " + game_name;
     }
-    
-    int sub_id = subscriptionIdCounter++;
-    int receipt_id = receiptIdCounter++;
-    
-    subscriptions[game_name] = sub_id;
-    receiptActions[receipt_id] = "Joined channel " + game_name;
     
     Frame frame("SUBSCRIBE");
     frame.addHeader("destination", "/" + game_name);
@@ -257,16 +296,21 @@ void StompProtocol::handleExit(const std::vector<std::string>& args) {
     
     std::string game_name = args[1];
     
-    if (subscriptions.find(game_name) == subscriptions.end()) {
-        std::cout << "Error: Not subscribed to " << game_name << std::endl;
-        return;
+    int sub_id, receipt_id;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        
+        if (subscriptions.find(game_name) == subscriptions.end()) {
+            std::cout << "Error: Not subscribed to " << game_name << std::endl;
+            return;
+        }
+        
+        sub_id = subscriptions[game_name];
+        receipt_id = receiptIdCounter++;
+        
+        receiptActions[receipt_id] = "Exited channel " + game_name;
+        subscriptions.erase(game_name);
     }
-    
-    int sub_id = subscriptions[game_name];
-    int receipt_id = receiptIdCounter++;
-    
-    receiptActions[receipt_id] = "Exited channel " + game_name;
-    subscriptions.erase(game_name);
     
     Frame frame("UNSUBSCRIBE");
     frame.addHeader("id", std::to_string(sub_id));
@@ -276,8 +320,12 @@ void StompProtocol::handleExit(const std::vector<std::string>& args) {
 }
 
 void StompProtocol::handleLogout() {
-    int receipt_id = receiptIdCounter++;
-    receiptActions[receipt_id] = "DISCONNECT";
+    int receipt_id;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        receipt_id = receiptIdCounter++;
+        receiptActions[receipt_id] = "DISCONNECT";
+    }
     
     Frame frame("DISCONNECT");
     frame.addHeader("receipt", std::to_string(receipt_id));
@@ -293,28 +341,34 @@ void StompProtocol::handleReport(const std::vector<std::string>& args) {
     
     std::string file_path = args[1];
     
-    names_and_events nne;
+    names_and_events names_events;
     try {
-        nne = parseEventsFile(file_path);
+        names_events = parseEventsFile(file_path);
     } catch (const std::exception& e) {
         std::cout << "Error reading file: " << e.what() << std::endl;
         return;
     }
     
-    std::string game_name = nne.team_a_name + "_" + nne.team_b_name;
+    std::string game_name = names_events.team_a_name + "_" + names_events.team_b_name;
     
-    if (subscriptions.find(game_name) == subscriptions.end()) {
-        std::cout << "Error: not subscribed to " << game_name << std::endl;
-        return;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (subscriptions.find(game_name) == subscriptions.end()) {
+            std::cout << "Error: not subscribed to " << game_name << std::endl;
+            return;
+        }
     }
     
-    for (const Event& event : nne.events) {
-        gameEvents[game_name][currentUserName].push_back(event);
+    for (const Event& event : names_events.events) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            gameEvents[game_name][currentUserName].push_back(event);
+        }
         
         std::string body;
         body += "user: " + currentUserName + "\n";
-        body += "team a: " + nne.team_a_name + "\n";
-        body += "team b: " + nne.team_b_name + "\n";
+        body += "team a: " + names_events.team_a_name + "\n";
+        body += "team b: " + names_events.team_b_name + "\n";
         body += "event name: " + event.get_name() + "\n";
         body += "time: " + std::to_string(event.get_time()) + "\n";
         
@@ -353,16 +407,22 @@ void StompProtocol::handleSummary(const std::vector<std::string>& args) {
     std::string user_name = args[2];
     std::string file_path = args[3];
     
-    if (gameEvents.find(game_name) == gameEvents.end()) {
-        std::cout << "No events found for game: " << game_name << std::endl;
-        return;
+    // Copy events while holding lock to prevent iterator invalidation
+    std::vector<Event> events;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        
+        if (gameEvents.find(game_name) == gameEvents.end()) {
+            std::cout << "No events found for game: " << game_name << std::endl;
+            return;
+        }
+        if (gameEvents[game_name].find(user_name) == gameEvents[game_name].end()) {
+            std::cout << "No events found for user: " << user_name << " in game " << game_name << std::endl;
+            return;
+        }
+        
+        events = gameEvents[game_name][user_name];
     }
-    if (gameEvents[game_name].find(user_name) == gameEvents[game_name].end()) {
-        std::cout << "No events found for user: " << user_name << " in game " << game_name << std::endl;
-        return;
-    }
-    
-    std::vector<Event> events = gameEvents[game_name][user_name];
     
     std::map<std::string, std::string> general_stats;
     std::map<std::string, std::string> team_a_stats;
@@ -404,6 +464,12 @@ void StompProtocol::handleSummary(const std::vector<std::string>& args) {
         for (const auto& kv : team_b_stats) {
             outfile << kv.first << ": " << kv.second << "\n";
         }
+        
+        // Sort events chronologically by time before printing
+        std::sort(events.begin(), events.end(), 
+            [](const Event& a, const Event& b) { 
+                return a.get_time() < b.get_time(); 
+            });
         
         outfile << "Game event reports:\n";
         for (const Event& ev : events) {

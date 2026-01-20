@@ -130,6 +130,19 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
         
+        // Track file upload in database (Section 3.3)
+        // Extract game channel from destination (format: "/game_channel")
+        String gameChannel = destination.startsWith("/") ? destination.substring(1) : destination;
+        
+        // Parse body to check if this is a game event report
+        String body = frame.getBody();
+        if (body != null && body.contains("user:") && body.contains("event name:")) {
+            // This is a game event - track it as file upload
+            // Extract filename from context or use generic name
+            String filename = "game_events.json"; // Generic name
+            Database.getInstance().trackFileUpload(username, filename, gameChannel);
+        }
+        
         // APPROACH 3: Get all subscribers and create unique MESSAGE frame for each
         // Generate unique message ID (same for all copies of this message)
         int messageId = messageIdCounter.incrementAndGet();

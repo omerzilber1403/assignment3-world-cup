@@ -26,10 +26,11 @@ public class Database {
 
 	/**
 	 * Execute SQL query and return result
+	 * SAFETY REQUIREMENT #3: synchronized for thread safety in TPC/Reactor
 	 * @param sql SQL query string
 	 * @return Result string from SQL server
 	 */
-	private String executeSQL(String sql) {
+	private synchronized String executeSQL(String sql) {
 		try (Socket socket = new Socket(sqlHost, sqlPort);
 			 PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
 			 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {

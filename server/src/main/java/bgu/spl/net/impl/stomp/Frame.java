@@ -149,11 +149,11 @@ public class Frame {
         return new Frame("ERROR", headers, detailedMessage != null ? detailedMessage : "");
     }
 
-    public static Frame createMessage(int messageId, String destination, int subscriptionId, String body) {
+    public static Frame createMessage(int messageId, String destination, String subscriptionId, String body) {
         Map<String, String> headers = new HashMap<>();
         headers.put("message-id", String.valueOf(messageId));
         headers.put("destination", destination);
-        headers.put("subscription", String.valueOf(subscriptionId));
+        headers.put("subscription", subscriptionId);
         return new Frame("MESSAGE", headers, body);
     }
 }

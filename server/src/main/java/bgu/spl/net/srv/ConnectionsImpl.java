@@ -6,8 +6,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ConnectionsImpl<T> implements Connections<T> {
 
     private final ConcurrentHashMap<Integer, ConnectionHandler<T>> handlers;
-    private final ConcurrentHashMap<String, ConcurrentHashMap<Integer, Integer>> channelSubscriptions;
-    private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, Integer>> clientSubscriptions;
+    private final ConcurrentHashMap<String, ConcurrentHashMap<Integer, String>> channelSubscriptions;
+    private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, String>> clientSubscriptions;
 
     public ConnectionsImpl() {
         this.handlers = new ConcurrentHashMap<>();
@@ -44,7 +44,7 @@ public class ConnectionsImpl<T> implements Connections<T> {
      * @param channel The channel/destination
      * @return Map of connectionId -> subscriptionId, or null if channel has no subscribers
      */
-    public ConcurrentHashMap<Integer, Integer> getChannelSubscribers(String channel) {
+    public ConcurrentHashMap<Integer, String> getChannelSubscribers(String channel) {
         return channelSubscriptions.get(channel);
     }
 
@@ -52,10 +52,10 @@ public class ConnectionsImpl<T> implements Connections<T> {
     public void disconnect(int connectionId) {
         ConnectionHandler<T> handler = handlers.remove(connectionId);
         if (handler != null) {
-            ConcurrentHashMap<String, Integer> subscriptions = clientSubscriptions.remove(connectionId);
+            ConcurrentHashMap<String, String> subscriptions = clientSubscriptions.remove(connectionId);
             if (subscriptions != null) {
                 for (String channel : subscriptions.keySet()) {
-                    ConcurrentHashMap<Integer, Integer> channelSubs = channelSubscriptions.get(channel);
+                    ConcurrentHashMap<Integer, String> channelSubs = channelSubscriptions.get(channel);
                     if (channelSubs != null) {
                         channelSubs.remove(connectionId);
                         if (channelSubs.isEmpty()) {
@@ -72,22 +72,22 @@ public class ConnectionsImpl<T> implements Connections<T> {
         }
     }
 
-    public void subscribe(int connectionId, String channel, int subscriptionId) {
+    public void subscribe(int connectionId, String channel, String subscriptionId) {
         channelSubscriptions.computeIfAbsent(channel, k -> new ConcurrentHashMap<>())
                 .put(connectionId, subscriptionId);
         
-        ConcurrentHashMap<String, Integer> clientSubs = clientSubscriptions.get(connectionId);
+        ConcurrentHashMap<String, String> clientSubs = clientSubscriptions.get(connectionId);
         if (clientSubs != null) {
             clientSubs.put(channel, subscriptionId);
         }
     }
 
-    public void unsubscribe(int connectionId, int subscriptionId) {
-        ConcurrentHashMap<String, Integer> clientSubs = clientSubscriptions.get(connectionId);
+    public void unsubscribe(int connectionId, String subscriptionId) {
+        ConcurrentHashMap<String, String> clientSubs = clientSubscriptions.get(connectionId);
         if (clientSubs != null) {
             String channelToRemove = null;
-            for (ConcurrentHashMap.Entry<String, Integer> entry : clientSubs.entrySet()) {
-                if (entry.getValue() == subscriptionId) {
+            for (ConcurrentHashMap.Entry<String, String> entry : clientSubs.entrySet()) {
+                if (entry.getValue().equals(subscriptionId)) {
                     channelToRemove = entry.getKey();
                     break;
                 }
@@ -96,7 +96,7 @@ public class ConnectionsImpl<T> implements Connections<T> {
             if (channelToRemove != null) {
                 clientSubs.remove(channelToRemove);
                 
-                ConcurrentHashMap<Integer, Integer> channelSubs = channelSubscriptions.get(channelToRemove);
+                ConcurrentHashMap<Integer, String> channelSubs = channelSubscriptions.get(channelToRemove);
                 if (channelSubs != null) {
                     channelSubs.remove(connectionId);
                     if (channelSubs.isEmpty()) {

@@ -14,8 +14,8 @@ public interface Connections<T> {
     
     void connect(int connectionId, ConnectionHandler<T> handler); 
 
-    void subscribe(int connectionId, String channel, int subscriptionId);
+    void subscribe(int connectionId, String channel, String subscriptionId);
 
-    void unsubscribe(int connectionId, int subscriptionId);
+    void unsubscribe(int connectionId, String subscriptionId);
 
 }

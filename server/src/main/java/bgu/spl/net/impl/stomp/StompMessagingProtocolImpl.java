@@ -17,7 +17,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     private Connections<String> connections;
     private String username;
     private boolean shouldTerminate;
-    private Map<Integer, String> subscriptionIdToChannel;
+    private Map<String, String> subscriptionIdToChannel;
     
     // Static message ID counter shared across all protocol instances
     private static final AtomicInteger messageIdCounter = new AtomicInteger(0);
@@ -148,16 +148,16 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         int messageId = messageIdCounter.incrementAndGet();
         
         // Get all subscribers for this channel
-        ConcurrentHashMap<Integer, Integer> subscribers = null;
+        ConcurrentHashMap<Integer, String> subscribers = null;
         if (connections instanceof ConnectionsImpl) {
             subscribers = ((ConnectionsImpl<String>) connections).getChannelSubscribers(destination);
         }
         
         if (subscribers != null && !subscribers.isEmpty()) {
             // Create and send unique MESSAGE frame for each subscriber
-            for (Map.Entry<Integer, Integer> entry : subscribers.entrySet()) {
+            for (Map.Entry<Integer, String> entry : subscribers.entrySet()) {
                 int subscriberConnectionId = entry.getKey();
-                int subscriptionId = entry.getValue();
+                String subscriptionId = entry.getValue();
                 
                 // Create unique MESSAGE frame with subscriber-specific subscription header
                 Frame messageFrame = Frame.createMessage(messageId, destination, subscriptionId, frame.getBody());
@@ -173,58 +173,44 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
     
     private void handleSubscribe(Frame frame) {
         String destination = frame.getHeader("destination");
-        String idStr = frame.getHeader("id");
+        String subscriptionId = frame.getHeader("id");
         
-        if (destination == null || idStr == null) {
+        if (destination == null || subscriptionId == null) {
             sendError("Missing destination or id header", frame.getHeader("receipt"));
             return;
         }
         
-        try {
-            int subscriptionId = Integer.parseInt(idStr);
-            
-            // Store subscription mapping
-            subscriptionIdToChannel.put(subscriptionId, destination);
-            
-            // Register with connections manager
-            connections.subscribe(connectionId, destination, subscriptionId);
-            
-            // Send RECEIPT if requested
-            sendReceipt(frame.getHeader("receipt"));
-            
-        } catch (NumberFormatException e) {
-            sendError("Invalid subscription id: " + idStr, frame.getHeader("receipt"));
-        }
+        // Store subscription mapping
+        subscriptionIdToChannel.put(subscriptionId, destination);
+        
+        // Register with connections manager
+        connections.subscribe(connectionId, destination, subscriptionId);
+        
+        // Send RECEIPT if requested
+        sendReceipt(frame.getHeader("receipt"));
     }
     
     private void handleUnsubscribe(Frame frame) {
-        String idStr = frame.getHeader("id");
+        String subscriptionId = frame.getHeader("id");
         
-        if (idStr == null) {
+        if (subscriptionId == null) {
             sendError("Missing id header", frame.getHeader("receipt"));
             return;
         }
         
-        try {
-            int subscriptionId = Integer.parseInt(idStr);
-            
-            // Verify subscription exists
-            if (!subscriptionIdToChannel.containsKey(subscriptionId)) {
-                sendError("Invalid subscription id: " + subscriptionId, 
-                          frame.getHeader("receipt"));
-                return;
-            }
-            
-            // Remove subscription
-            subscriptionIdToChannel.remove(subscriptionId);
-            connections.unsubscribe(connectionId, subscriptionId);
-            
-            // Send RECEIPT if requested
-            sendReceipt(frame.getHeader("receipt"));
-            
-        } catch (NumberFormatException e) {
-            sendError("Invalid subscription id: " + idStr, frame.getHeader("receipt"));
+        // Verify subscription exists
+        if (!subscriptionIdToChannel.containsKey(subscriptionId)) {
+            sendError("Invalid subscription id: " + subscriptionId, 
+                      frame.getHeader("receipt"));
+            return;
         }
+        
+        // Remove subscription
+        subscriptionIdToChannel.remove(subscriptionId);
+        connections.unsubscribe(connectionId, subscriptionId);
+        
+        // Send RECEIPT if requested
+        sendReceipt(frame.getHeader("receipt"));
     }
     
     private void handleDisconnect(Frame frame) {

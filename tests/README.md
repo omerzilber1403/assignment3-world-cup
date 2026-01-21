@@ -3,19 +3,109 @@
 ## 📋 סקירה כללית
 
 תיקייה זו מכילה **מערכת טסטים מלאה** שבודקת **כל** חלקי העבודה:
-- ✅ **Client** - כל הפקודות והלוגיקה
-- ✅ **Server** - Reactor, TPC, STOMP Protocol
+- ✅ **Client** (Section 3.1) - כל הפקודות והלוגיקה
+- ✅ **Server** (Section 3.2) - Reactor, TPC, STOMP Protocol
+- ✅ **SQL Integration** (Section 3.3) - Database + Safety Requirements
 - ✅ **Integration** - תקשורת מלאה בין לקוח לשרת
 - ✅ **Concurrency** - מספר לקוחות במקביל
-- ✅ **Protocol Compliance** - התאמה מדויקת ל-PDF
 
 ---
 
-## 🎯 **רמות טסטים - 4 שכבות**
+## 🚀 **איך להריץ את כל הטסטים? (RECOMMENDED)**
 
-### **Level 1: Unit Tests** ⚡ (אין צורך בשרת)
+```bash
+cd /workspaces/Assignment\ 3\ SPL
+./tests/run_all_tests.sh
+```
 
-טסטים שבודקים רכיבים בודדים בלבד.
+**משך זמן:** ~4 דקות  
+**תוצאה:** סיכום מלא של כל הטסטים
+
+---
+
+## 📊 **טסטים זמינים**
+
+### 1️⃣ Quick Smoke Test (30 seconds)
+```bash
+./tests/quick_smoke_test.sh
+```
+**בודק:**
+- קומפילציה (client + server)
+- הפעלת שרתים (SQL + STOMP)
+- חיבור בסיסי
+- יצירת database
+
+**תוצאה מצופה:**
+```
+✅ PASS: Client compiled
+✅ PASS: Server compiled
+✅ PASS: Python SQL Server started
+✅ PASS: STOMP Server operational
+✅ SMOKE TEST PASSED
+```
+
+---
+
+### 2️⃣ SQL Integration Test (60 seconds) - **SECTION 3.3**
+```bash
+./tests/sql_integration_test.sh
+```
+**בודק:**
+- ✅ Database initialization (3 tables)
+- ✅ INSERT/SELECT/UPDATE operations
+- ✅ **SAFETY #1:** Logout logic with IS NULL
+- ✅ **SAFETY #2:** TCP buffer safety (loop until \0)
+- ✅ **SAFETY #3:** Concurrent access (10 threads)
+- ✅ File tracking
+- ✅ Data persistence after restart
+
+**תוצאה מצופה:**
+```
+✅ Test 1: Database Initialization
+✅ Test 2: User Registration
+✅ Test 3: User Query
+✅ Test 4: Login History Tracking
+✅ Test 5: SAFETY #1 - Logout Logic
+✅ Test 6: SAFETY #2 - TCP Buffer Safety
+✅ Test 7: SAFETY #3 - Concurrent Access
+✅ SQL INTEGRATION TEST PASSED
+```
+
+---
+
+### 3️⃣ Full Integration Test (120 seconds) - **SECTIONS 3.1 + 3.2**
+```bash
+./tests/full_integration_test.sh
+```
+**בודק:**
+- Scenario 1: Single user workflow (login → join → report → logout)
+- Scenario 2: Two users exchanging messages
+- Scenario 3: Error handling (wrong password, etc.)
+- Scenario 4: 5 concurrent clients
+- Scenario 5: File upload tracking validation
+
+**תוצאה מצופה:**
+```
+✅ Scenario 1: User workflow complete
+✅ Scenario 2: Both users registered
+✅ Wrong password rejected correctly
+✅ Scenario 4: 5+ users handled concurrently
+✅ FULL INTEGRATION TEST PASSED
+```
+
+---
+
+### 4️⃣ Unit Tests (C++) - **CLIENT VALIDATION**
+```bash
+cd tests
+make test
+./test_frame_format
+./test_event_parsing
+```
+**בודק:**
+- STOMP frame formatting (PDF compliance)
+- JSON event parsing
+- Frame parsing from server
 
 #### 📄 `test_frame_format.cpp` - בדיקת פורמט Frames
 
